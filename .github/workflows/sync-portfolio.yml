@@ -9,6 +9,7 @@ on:
       - '02-networking-and-web/**'
       - '03-docker-containers/**'
       - '04-cicd-and-automation/**'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -65,21 +66,18 @@ jobs:
                           with open(file_path, "r", encoding="utf-8") as f:
                               content = f.read()
 
-                          # Extract title from first H1 or H2
                           title_match = re.search(r"^#{1,2}\s+(.*)", content, re.MULTILINE)
                           if title_match:
                               title = title_match.group(1).strip()
                           else:
                               title = os.path.splitext(file)[0].replace("-", " ").title()
 
-                          # Extract or detect severity
                           severity = "HIGH"
                           if "CRITICAL" in content.upper() or "PRIORITY: CRITICAL" in content.upper():
                               severity = "CRITICAL"
                           elif "MEDIUM" in content.upper() or "PRIORITY: MEDIUM" in content.upper():
                               severity = "MEDIUM"
 
-                          # Generate tags from filename keywords
                           tags = [t for t in os.path.splitext(file)[0].split("-") if not t.isdigit() and len(t) > 2][:4]
                           if not tags:
                               tags = [cat_key, "troubleshooting"]
