@@ -1,0 +1,118 @@
+name: Sync Incidents to Portfolio
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '01-linux-system-troubleshooting/**'
+      - '02-networking-and-web/**'
+      - '03-docker-containers/**'
+      - '04-cicd-and-automation/**'
+  workflow_dispatch:
+
+jobs:
+  generate-and-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Scenarios Repo
+        uses: actions/checkout@v4
+        with:
+          path: scenarios-repo
+
+      - name: Checkout Target Portfolio Repo
+        uses: actions/checkout@v4
+        with:
+          repository: arian-0058/arian-0058.github.io
+          token: ${{ secrets.SYNC_TOKEN }}
+          path: portfolio-repo
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Parse Runbooks & Generate incidents.json
+        run: |
+          python3 - << 'EOF'
+          import os
+          import json
+          import re
+
+          categories = {
+              "01-linux-system-troubleshooting": "linux",
+              "02-networking-and-web": "networking",
+              "03-docker-containers": "docker",
+              "04-cicd-and-automation": "cicd"
+          }
+
+          incidents = []
+          base_dir = "scenarios-repo"
+          counter = 1
+
+          for folder, cat_key in categories.items():
+              folder_path = os.path.join(base_dir, folder)
+              if not os.path.exists(folder_path):
+                  continue
+
+              for root, _, files in os.walk(folder_path):
+                  for file in sorted(files):
+                      if file.endswith(".md") and file.upper() != "README.MD":
+                          file_path = os.path.join(root, file)
+                          rel_path = os.path.relpath(file_path, base_dir)
+
+                          with open(file_path, "r", encoding="utf-8") as f:
+                              content = f.read()
+
+                          # Extract title from first H1 or H2
+                          title_match = re.search(r"^#{1,2}\s+(.*)", content, re.MULTILINE)
+                          if title_match:
+                              title = title_match.group(1).strip()
+                          else:
+                              title = os.path.splitext(file)[0].replace("-", " ").title()
+
+                          # Extract or detect severity
+                          severity = "HIGH"
+                          if "CRITICAL" in content.upper() or "PRIORITY: CRITICAL" in content.upper():
+                              severity = "CRITICAL"
+                          elif "MEDIUM" in content.upper() or "PRIORITY: MEDIUM" in content.upper():
+                              severity = "MEDIUM"
+
+                          # Generate tags from filename keywords
+                          tags = [t for t in os.path.splitext(file)[0].split("-") if not t.isdigit() and len(t) > 2][:4]
+                          if not tags:
+                              tags = [cat_key, "troubleshooting"]
+
+                          github_url = f"https://github.com/arian-0058/devops-troubleshooting-scenario/blob/main/{rel_path}"
+
+                          incidents.append({
+                              "id": f"{cat_key}-{counter:02d}",
+                              "category": cat_key,
+                              "title": title,
+                              "severity": severity,
+                              "tags": tags,
+                              "steps": "Problem -> Failure Injection -> Symptoms -> RCA -> Fix -> Lesson Learned",
+                              "github_url": github_url
+                          })
+                          counter += 1
+
+          target_path = "portfolio-repo/incidents.json"
+          with open(target_path, "w", encoding="utf-8") as f:
+              json.dump(incidents, f, indent=2, ensure_ascii=False)
+
+          print(f"Generated {len(incidents)} incidents into {target_path}")
+          EOF
+
+      - name: Commit and Push to Portfolio Repo
+        run: |
+          cd portfolio-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add incidents.json
+          if git diff --staged --quiet; then
+            echo "No changes in incidents database."
+          else
+            git commit -m "chore(data): auto-sync incidents from devops-troubleshooting-scenario [skip ci]"
+            git push origin main
+          fi
