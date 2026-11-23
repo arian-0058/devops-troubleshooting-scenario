@@ -5,10 +5,7 @@ on:
     branches:
       - main
     paths:
-      - '01-linux-system-troubleshooting/**'
-      - '02-networking-and-web/**'
-      - '03-docker-containers/**'
-      - '04-cicd-and-automation/**'
+      - '**/*.md'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -35,35 +32,37 @@ jobs:
           python-version: '3.11'
 
       - name: Parse Runbooks & Generate incidents.json
+        shell: python3 {0}
         run: |
-          python3 - << 'EOF'
           import os
           import json
           import re
+          from urllib.parse import quote
 
-          categories = {
-              "01-linux-system-troubleshooting": "linux",
-              "02-networking-and-web": "networking",
-              "03-docker-containers": "docker",
-              "04-cicd-and-automation": "cicd"
-          }
-
-          incidents = []
           base_dir = "scenarios-repo"
+          incidents = []
           counter = 1
 
-          for folder, cat_key in categories.items():
+          dirs = sorted([
+              d for d in os.listdir(base_dir)
+              if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith(".")
+          ])
+
+          for idx, folder in enumerate(dirs, start=1):
+              clean_slug = re.sub(r'^\d+[-_\s]*', '', folder).strip()
+              cat_key = re.sub(r'[^a-z0-9]+', '-', clean_slug.lower()).strip('-') or f"module-{idx}"
+              pretty_name = re.sub(r'[-_]+', ' ', clean_slug or folder).title()
+              category_label = f"{idx}. {pretty_name}"
+
               folder_path = os.path.join(base_dir, folder)
-              if not os.path.exists(folder_path):
-                  continue
-
-              for root, _, files in os.walk(folder_path):
+              for root, subdirs, files in os.walk(folder_path):
+                  subdirs[:] = sorted([s for s in subdirs if not s.startswith(".")])
                   for file in sorted(files):
-                      if file.endswith(".md") and file.upper() != "README.MD":
+                      if file.lower().endswith(".md") and file.lower() != "readme.md":
                           file_path = os.path.join(root, file)
-                          rel_path = os.path.relpath(file_path, base_dir)
+                          rel_path = os.path.relpath(file_path, base_dir).replace(os.sep, "/")
 
-                          with open(file_path, "r", encoding="utf-8") as f:
+                          with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                               content = f.read()
 
                           title_match = re.search(r"^#{1,2}\s+(.*)", content, re.MULTILINE)
@@ -72,21 +71,25 @@ jobs:
                           else:
                               title = os.path.splitext(file)[0].replace("-", " ").title()
 
-                          severity = "HIGH"
-                          if "CRITICAL" in content.upper() or "PRIORITY: CRITICAL" in content.upper():
+                          upper_content = content.upper()
+                          if "CRITICAL" in upper_content:
                               severity = "CRITICAL"
-                          elif "MEDIUM" in content.upper() or "PRIORITY: MEDIUM" in content.upper():
+                          elif "MEDIUM" in upper_content:
                               severity = "MEDIUM"
+                          else:
+                              severity = "HIGH"
 
-                          tags = [t for t in os.path.splitext(file)[0].split("-") if not t.isdigit() and len(t) > 2][:4]
+                          name_no_ext = os.path.splitext(file)[0]
+                          tags = [t.lower() for t in re.sub(r'^\d+[-_]?', '', name_no_ext).split("-") if not t.isdigit() and len(t) > 2][:4]
                           if not tags:
                               tags = [cat_key, "troubleshooting"]
 
-                          github_url = f"https://github.com/arian-0058/devops-troubleshooting-scenario/blob/main/{rel_path}"
+                          github_url = f"https://github.com/arian-0058/devops-troubleshooting-scenario/blob/main/{quote(rel_path)}"
 
                           incidents.append({
                               "id": f"{cat_key}-{counter:02d}",
                               "category": cat_key,
+                              "category_label": category_label,
                               "title": title,
                               "severity": severity,
                               "tags": tags,
@@ -99,8 +102,7 @@ jobs:
           with open(target_path, "w", encoding="utf-8") as f:
               json.dump(incidents, f, indent=2, ensure_ascii=False)
 
-          print(f"Generated {len(incidents)} incidents into {target_path}")
-          EOF
+          print(f"Generated {len(incidents)} incidents across {len(dirs)} folders: {dirs}")
 
       - name: Commit and Push to Portfolio Repo
         run: |
@@ -111,6 +113,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes in incidents database."
           else
-            git commit -m "chore(data): auto-sync incidents from devops-troubleshooting-scenario [skip ci]"
+            git commit -m "chore(data): auto-sync incidents from devops-troubleshooting-scenario"
             git push origin main
           fi
